@@ -1,0 +1,9 @@
+ccxt>=4.5.80
+pandas>=2.2
+numpy>=1.26
+PyYAML>=6.0
+python-dotenv>=1.0
+requests>=2.31
+redis>=5.0
+psycopg[binary]>=3.2
+pytest>=8.0

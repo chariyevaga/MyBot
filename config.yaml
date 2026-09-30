@@ -1,0 +1,169 @@
+# =====================================================================
+#  SMC Trading Bot - Ayarlar
+#  Tüm istekler ve açıklamalar: REQUIREMENTS.md  /  docs/STRATEGY.md
+# =====================================================================
+
+# paper = gerçek fiyatlarla sanal hesap (API anahtarı gerekmez)
+# demo  = Binance Demo Trading (demo API anahtarı)
+# live  = GERÇEK PARA
+mode: paper
+quote: USDT
+
+# ---------------------------------------------------------------------
+# İşlem yapılacak coinler (Binance USDⓈ-M perpetual)
+# ---------------------------------------------------------------------
+universe:
+  mode: static            # static = aşağıdaki liste | top_volume = 24s hacme göre otomatik ilk N (sadece kripto)
+  symbols: [BTC, ETH, XRP, BNB, SOL, DOGE, ADA, TRX, LINK, AVAX]
+  top_n: 10
+  min_listing_days: 180   # top_volume modunda yeni listelenen coinleri alma
+  exclude: [USDC, FDUSD, TUSD, USDP, DAI, BUSD]
+
+# ---------------------------------------------------------------------
+# Zamanlama
+# ---------------------------------------------------------------------
+schedule:
+  scan_interval_minutes: 5        # her 5 dk: önce yeni işlem taraması, sonra açık pozisyon optimizasyonu
+  candle_close_delay_seconds: 8   # mum kapandıktan kaç sn sonra taransın
+  monitor_interval_seconds: 15    # emir dolumu / SL-TP kontrolü (pozisyonun korumasız kalmaması için)
+
+timeframes:
+  htf: 4h     # ana yön (bias)
+  mtf: 1h     # likidite seviyeleri, dealing range, 1H yapı
+  ltf: 15m    # sweep + MSS + FVG/OB giriş
+  exec: 5m    # fiyat takibi / optimizasyon
+
+# ---------------------------------------------------------------------
+# SMC Strateji
+# ---------------------------------------------------------------------
+strategy:
+  atr_period: 14
+  swing_length_htf: 3
+  swing_length_mtf: 3
+  swing_length_ltf: 3       # optimizasyonda kullanılan 15m yapı
+  internal_length: 2        # MSS (market structure shift) için iç yapı
+  liquidity:
+    swing_length_ltf: 5
+    swing_length_mtf: 3
+    eq_tolerance_atr: 0.1   # equal high/low toleransı (ATR katı)
+    eq_lookback_ltf: 96
+    eq_lookback_mtf: 72
+    swing_life_hours_ltf: 48
+    swing_life_hours_mtf: 120
+    asia_end_hour_utc: 7    # Asya seansı 00:00-07:00 UTC
+  sweep:
+    reclaim_bars: 2         # seviyenin altına/üstüne iğne sonrası en fazla kaç mumda geri kapanmalı
+    max_depth_atr: 2.0      # daha derin kırılım = gerçek kırılım, sweep değil
+    min_level_age_bars: 3
+  mss_lookback_bars: 30
+  mss_window_bars: 16       # sweep sonrası MSS için en fazla 16 x 15m = 4 saat
+  displacement_atr: 1.0     # güçlü mum gövdesi >= 1.0 ATR
+  min_fvg_atr: 0.1
+  entry_mode: market        # market = MSS onay mumu kapanışında gir (varsayılan, backtestte daha iyi)
+                            # limit  = FVG/OB bölgesine limit emir bırak (dolmayan çok, bkz. docs/RESEARCH.md)
+  entry_at: ce              # limit modunda: ce = FVG'nin %50'si | proximal = FVG'nin yakın kenarı
+  allow_ob_only: true       # FVG yoksa Order Block ile giriş
+  sl_buffer_atr: 0.25       # stop, sweep ucunun 0.25 ATR ötesinde
+  min_sl_atr_h1: 1.0        # minimum stop mesafesi (1H ATR) -> işlemler saatlerce sürer (günlük işlem)
+  max_sl_atr_h1: 4.0
+  min_sl_pct: 0.8           # minimum stop %'si: gidiş-dönüş %0.1 komisyon riskin ~%12'sini geçmesin
+  min_room_rr: 0            # karşı likiditeye minimum alan (R). 0 = kapalı (backtestte fayda görülmedi)
+  entry_expiry_bars: 8      # limit emir 8 x 15m = 2 saat geçerli
+  setup_max_age_minutes: 60
+  require_htf_alignment: true   # sadece 4H trend yönünde işlem
+  require_killzone: true        # sadece London/NY killzone saatlerinde oluşan setuplar
+  min_sweep_weight: 10          # 10 = en az 1H swing / EQH-EQL / PDH-PDL / PWH-PWL sweep'i (15m swing ve Asya hariç)
+  max_entry_drift_r: 0.25       # market modunda fiyat setup kapanışından 0.25R'den fazla kaçtıysa girme
+  min_score: 40             # confluence skoru (0-100) minimumu (asıl eleme yukarıdaki sert filtrelerde)
+  a_plus_score: 80          # A+ setup: 3R hedef ve %4 risk
+  smt_window_bars: 24
+  killzones_utc: [[7, 10], [12, 15]]   # London / New York açılışları
+
+# ---------------------------------------------------------------------
+# Risk yönetimi
+# ---------------------------------------------------------------------
+risk:
+  max_risk_pct: 4.0         # tek işlemde maksimum risk (bakiyenin %4'ü) - kodda da 4.0 ile sınırlı
+  tiers:                    # skora göre risk. Backtestte skor sonucu tahmin etmedi -> varsayılan sabit %2
+    - {min_score: 0, risk_pct: 2.0}
+  # Örnek (skora göre artan risk, en fazla %4):
+  #  - {min_score: 80, risk_pct: 4.0}
+  #  - {min_score: 68, risk_pct: 3.0}
+  #  - {min_score: 0,  risk_pct: 2.0}
+  base_rr: 2.0              # normal hedef 2:1
+  max_rr: 3.0               # maksimum hedef 3:1 (kodda da 3.0 ile sınırlı)
+  max_open_positions: 3     # aynı anda en fazla 3 pozisyon (coin başına en fazla 1)
+  max_total_risk_pct: 10.0  # açık pozisyonların toplam riski
+  max_daily_loss_pct: 6.0   # günlük zarar limiti -> gün sonuna kadar yeni işlem yok
+  max_consecutive_losses: 3
+  cooldown_hours: 6         # 3 ardışık zarardan sonra bekleme
+  max_drawdown_pct: 25.0    # zirveden düşüş -> bot yeni işlem açmayı durdurur (/resume gerekir)
+  symbol_cooldown_minutes: 60   # aynı coinde işlem kapandıktan sonra bekleme
+  margin_mode: isolated
+  leverage_max: 20
+  sl_working_type: MARK_PRICE
+  fees: {maker: 0.0002, taker: 0.0005}
+
+# ---------------------------------------------------------------------
+# Pozisyon optimizasyonu (her taramadan sonra açık pozisyonlara uygulanır)
+# ---------------------------------------------------------------------
+optimizer:
+  enabled: true
+  min_hold_minutes: 60          # ilk 1 saat erken çıkış yok (sadece SL/TP)
+  breakeven_at_r: 1.0           # +1R görülünce stop girişe (+küçük tampon)
+  breakeven_buffer_r: 0.05
+  lock_steps: [[1.5, 0.5], [2.0, 1.0], [2.5, 1.5]]   # [görülen R, kilitlenecek R]
+  min_sl_step_r: 0.1
+  trail_structure: true         # 15m swing'lere göre stop takibi
+  trail_after_r: 1.5
+  trail_buffer_atr: 0.1
+  # Aşağıdaki kurallar hazır ama KAPALI: 2 yıllık backtestte performansı düşürdüler (docs/RESEARCH.md)
+  extend_tp: false              # momentum varsa TP'yi uzat (en fazla max_rr)
+  extend_trigger_r: 1.6
+  structure_exit: false         # 15m yapı aleyhe kırılırsa anında çık
+  structure_exit_max_r: 0.5
+  htf_flip_exit: false          # 1H yapı aleyhe dönerse anında çık
+  htf_flip_exit_max_r: 1.0
+  stale_after_hours: 0          # 0 = kapalı | örn 6: 6 saatte +0.5R görmemiş ve zarardaysa çık
+  stale_max_mfe_r: 0.5
+  max_hold_hours: 24            # günlük işlem: en fazla 24 saat
+  news_protect_minutes: 30      # yüksek etkili haberden 30 dk önce kârdaki pozisyonun stopunu girişe çek
+  news_protect_min_r: 0.5
+
+# ---------------------------------------------------------------------
+# Ekonomik takvim (haber filtresi)
+# ---------------------------------------------------------------------
+news:
+  enabled: true
+  url_this_week: https://nfs.faireconomy.media/ff_calendar_thisweek.json
+  url_next_week: https://nfs.faireconomy.media/ff_calendar_nextweek.json
+  block_hours_before: 4         # 4 saat içinde haber varsa yeni işlem açma
+  block_minutes_after: 30       # haberden sonra 30 dk bekle
+  currencies: [USD]
+  impacts: [High]
+  refresh_minutes: 60
+  fail_closed: true             # haber verisi hiç alınamazsa işlem açma
+
+# ---------------------------------------------------------------------
+# Telegram
+# ---------------------------------------------------------------------
+telegram:
+  enabled: true
+  commands: true
+  display_timezone: Asia/Ashgabat   # Telegram mesajlarındaki saatler (UTC+5). Örn: UTC, Europe/Istanbul
+
+# ---------------------------------------------------------------------
+# Depolama
+# ---------------------------------------------------------------------
+storage:
+  redis_prefix: "smcbot:"
+  state_file: state/state.json      # Redis yoksa yedek
+  db_log_level: INFO                # PostgreSQL'e yazılacak log seviyesi
+  equity_snapshot_minutes: 15
+
+paper:
+  start_balance: 1000
+
+logging:
+  level: INFO
+  file: logs/bot.log

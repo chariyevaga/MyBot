@@ -1,0 +1,62 @@
+services:
+  bot:
+    build: .
+    container_name: smcbot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-smcbot}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-smcbot}
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./state:/app/state
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./backtests:/app/backtests
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options: {max-size: "20m", max-file: "5"}
+
+  redis:
+    image: redis:7-alpine
+    container_name: smcbot-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    # port yok: Redis'e sadece bot, Docker'ın iç ağından erişir
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: smcbot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-smcbot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-smcbot}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    # Sadece sunucunun kendisinden (127.0.0.1) erişilir, internete AÇIK DEĞİL.
+    # Uzaktan bakmak için SSH tüneli:  ssh -L 5432:127.0.0.1:5432 kullanici@sunucu
+    # Hiç gerekmiyorsa bu iki satırı silebilirsiniz.
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smcbot} -d ${POSTGRES_DB:-smcbot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis-data:
+  pg-data:
