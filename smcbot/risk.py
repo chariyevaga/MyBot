@@ -50,15 +50,14 @@ def choose_leverage(notional: float, free_balance: float, slots_left: int, sl_di
 class RiskGuard:
     """Daily loss limit, losing-streak cooldown, drawdown halt. State lives in the KV store."""
 
-    KEY = "risk"
-
-    def __init__(self, risk_cfg, kv):
+    def __init__(self, risk_cfg, kv, key: str = "risk"):
         self.cfg = risk_cfg
         self.kv = kv
-        self.s = kv.get_json(self.KEY) or {}
+        self.key = key
+        self.s = kv.get_json(key) or {}
 
     def _save(self) -> None:
-        self.kv.set_json(self.KEY, self.s)
+        self.kv.set_json(self.key, self.s)
 
     def on_cycle(self, equity: float, now: pd.Timestamp) -> None:
         day = now.strftime("%Y-%m-%d")
@@ -79,7 +78,7 @@ class RiskGuard:
         msg = None
         if pnl < 0:
             self.s["consecutive_losses"] = int(self.s.get("consecutive_losses", 0)) + 1
-            if self.s["consecutive_losses"] >= self.cfg.max_consecutive_losses:
+            if self.cfg.max_consecutive_losses and self.s["consecutive_losses"] >= self.cfg.max_consecutive_losses:
                 until = now + pd.Timedelta(hours=self.cfg.cooldown_hours)
                 self.s["paused_until"] = to_iso(until)
                 self.s["consecutive_losses"] = 0

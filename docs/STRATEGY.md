@@ -1,5 +1,37 @@
 # Strateji ve Algoritma
 
+Bot iki strateji çalıştırır; her biri kendi **hesabında**:
+
+| Strateji | Hesap | Neden |
+|---|---|---|
+| 📈 Trend takibi (4H) | `main` → `mode`'a göre paper / demo / live | 2 yıllık, 30 coinlik testte iki yılda da pozitif |
+| 🎯 SMC (15m) | `shadow` → her zaman sanal, gerçek emir yok | Avantajı kanıtlanmadı; canlı veriyle gözlem ve veri toplama |
+
+Hesaplar ayrı bakiye, ayrı risk korumaları ve ayrı istatistik tutar (PostgreSQL `mode` = paper/demo/live
+veya `shadow`, `strategy` = trend/smc).
+
+## 0. Trend takibi (`smcbot/trend.py`)
+
+Her 4H mum kapanışında (00, 04, 08, 12, 16, 20 UTC; tarama en geç 30 dk içinde):
+
+1. **Giriş (long):** 4H kapanış > önceki 20 mumun en yükseği **ve** son kapanmış günlük mum
+   EMA50'nin üstünde. Short: tersi (en düşük altı kapanış + günlük EMA50 altı).
+2. **Emir:** piyasa emri; fiyat sinyal kapanışından 0.3R'den fazla kaçtıysa girilmez.
+3. **Stop:** giriş − 3 × ATR(4H, 14). Borsaya STOP_MARKET (mark price) olarak konur. **TP yok.**
+4. **İz süren stop (chandelier):** her 4H kapanışında `girişten beri en iyi kapanış − 3 × ATR`;
+   sadece sıkılaşır, en az 0.1R ilerleyince güncellenir. Fiyat yeni stopun gerisindeyse pozisyon kapatılır.
+5. **Risk:** long %1, short %0.5 (short tarafı backtestte tutarsızdı); en fazla 6 pozisyon, coin
+   başına 1, toplam açık risk %8. Stop mesafesi ortalama fiyatın %8'i olduğu için kaldıraç genelde 1-2x.
+6. **Koruma:** günlük zarar %6, zirveden %35 düşüşte durur. Ardışık kayıp molası **yok** (kazanma
+   oranı ~%36 olan bir stratejide kayıp serileri normaldir).
+7. **Haber filtresi:** kapalı (`strategies.trend.news_filter`), çünkü çok günlük pozisyonlarda test
+   edilemedi. Açılabilir.
+
+Pozisyonlar ortalama ~4.5 gün açık kalır. Kâr az sayıda büyük trendden gelir; işlemlerin çoğu
+küçük kayıpla kapanır. Test sonuçları: [RESEARCH.md](RESEARCH.md).
+
+Aşağıdaki bölümler SMC stratejisini anlatır.
+
 Tüm hesaplamalar **ileriye bakmaz** (look-ahead yok): bir swing noktası ancak sağında
 `length` mum kapandıktan sonra bilinir, yapı kırılımları mum kapanışıyla değerlendirilir,
 üst zaman dilimi değerleri sadece kapanmış mumlardan alınır. Bu `tests/test_smc.py >

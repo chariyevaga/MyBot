@@ -81,14 +81,14 @@ class Journal:
         return self._exec(sql, params, fetch=True) or []
 
     # ------------------------------------------------------------------
-    def upsert_trade(self, t: Trade) -> None:
+    def upsert_trade(self, t: Trade, mode: str | None = None) -> None:
         filled = from_iso(t.filled_at)
         closed = from_iso(t.closed_at)
         hold = (closed - filled).total_seconds() / 60 if filled and closed else None
         mfe_r = t.r_at(t.mfe_price) if t.mfe_price and t.fill_price else None
         mae_r = t.r_at(t.mae_price) if t.mae_price and t.fill_price else None
         row = dict(
-            id=t.id, mode=self.mode, symbol=t.symbol, side=t.side, status=t.status, setup_id=t.setup_id,
+            id=t.id, mode=mode or self.mode, strategy=t.strategy, symbol=t.symbol, side=t.side, status=t.status, setup_id=t.setup_id,
             score=t.score, reasons=_j(t.reasons), poi=t.poi, swept=_j(t.swept), planned_entry=t.entry,
             fill_price=t.fill_price, initial_sl=t.initial_sl, initial_tp=t.initial_tp, sl=t.sl, tp=t.tp,
             tp_r=t.tp_r, qty=t.filled_qty or t.qty, leverage=t.leverage, risk_pct=t.risk_pct,
@@ -121,30 +121,32 @@ class Journal:
         self._exec("INSERT INTO trade_events (trade_id, event, message, price, data) VALUES (%s, %s, %s, %s, %s)",
                    (trade_id, event, message, price, _j(data or {})))
 
-    def record_setup(self, s, taken: bool, reject_reason: str | None) -> None:
+    def record_setup(self, s, taken: bool, reject_reason: str | None, mode: str | None = None) -> None:
         self._exec(
-            """INSERT INTO setups (id, mode, symbol, side, created_at, score, taken, reject_reason, entry, sl, tp,
-                                   tp_r, poi, swept, reasons, features)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """INSERT INTO setups (id, mode, strategy, symbol, side, created_at, score, taken, reject_reason, entry,
+                                   sl, tp, tp_r, poi, swept, reasons, features)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                ON CONFLICT (id) DO UPDATE SET
                    taken = setups.taken OR EXCLUDED.taken,
                    reject_reason = CASE WHEN setups.taken OR EXCLUDED.taken THEN NULL ELSE EXCLUDED.reject_reason END,
                    score = EXCLUDED.score""",
-            (s.id, self.mode, s.symbol, s.side, s.created_at.to_pydatetime(), s.score, taken, reject_reason,
+            (s.id, mode or self.mode, s.strategy, s.symbol, s.side, s.created_at.to_pydatetime(), s.score, taken,
+             reject_reason,
              s.entry, s.sl, s.tp, s.tp_r, s.poi, _j(s.swept), _j(s.reasons), _j(s.features)),
         )
 
     def record_scan(self, duration_ms: int, symbols: int, found: int, placed: int,
-                    blocked_reason: str | None, details: dict) -> None:
+                    blocked_reason: str | None, details: dict, mode: str | None = None) -> None:
         self._exec(
             "INSERT INTO scan_runs (mode, duration_ms, symbols, setups_found, orders_placed, blocked_reason, details) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s)",
-            (self.mode, duration_ms, symbols, found, placed, blocked_reason, _j(details)),
+            (mode or self.mode, duration_ms, symbols, found, placed, blocked_reason, _j(details)),
         )
 
-    def snapshot_equity(self, equity: float, free: float, open_positions: int, open_risk: float) -> None:
+    def snapshot_equity(self, equity: float, free: float, open_positions: int, open_risk: float,
+                        mode: str | None = None) -> None:
         self._exec("INSERT INTO equity_snapshots (mode, equity, free_balance, open_positions, open_risk_usd) "
-                   "VALUES (%s,%s,%s,%s,%s)", (self.mode, equity, free, open_positions, open_risk))
+                   "VALUES (%s,%s,%s,%s,%s)", (mode or self.mode, equity, free, open_positions, open_risk))
 
     def insert_logs(self, rows: list[tuple]) -> None:
         if not rows or not self.enabled:

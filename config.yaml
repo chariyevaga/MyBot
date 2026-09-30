@@ -14,10 +14,44 @@ quote: USDT
 # ---------------------------------------------------------------------
 universe:
   mode: static            # static = aşağıdaki liste | top_volume = 24s hacme göre otomatik ilk N (sadece kripto)
-  symbols: [BTC, ETH, XRP, BNB, SOL, DOGE, ADA, TRX, LINK, AVAX]
+  # 30 coin: 2 yıldan uzun süredir listelenen, en yüksek hacimli kriptolar (research/universe.py)
+  symbols: [BTC, ETH, SOL, XRP, DOGE, BNB, ADA, LINK, AVAX, TRX, ZEC, WLD, 1000PEPE, NEAR, ENA,
+            SUI, TAO, XLM, AAVE, UNI, BCH, ONDO, FIL, LTC, DOT, 1000SHIB, INJ, XMR, ARB, FET]
   top_n: 10
   min_listing_days: 180   # top_volume modunda yeni listelenen coinleri alma
   exclude: [USDC, FDUSD, TUSD, USDP, DAI, BUSD]
+
+# ---------------------------------------------------------------------
+# Stratejiler ve hesaplar
+#   account: main   -> ana hesap (mode: paper/demo/live)
+#   account: shadow -> her zaman SANAL gözlem hesabı (gerçek emir yok, ayrı bakiye ve istatistik)
+# ---------------------------------------------------------------------
+strategies:
+  smc:
+    enabled: true
+    account: shadow           # backtestte avantajı çıkmadı -> sadece gözlem (docs/RESEARCH.md)
+    notify: true              # gözlem işlemleri de Telegram'a "👁 GÖZLEM" etiketiyle gelsin
+  trend:
+    enabled: true
+    account: main
+    donchian_bars: 20         # 4H: son 20 mumun (~3.3 gün) zirvesi/dibi kırılınca giriş
+    atr_period: 14
+    atr_mult: 3.0             # ilk stop ve iz süren stop: 3 x ATR(4H)
+    daily_ema: 50             # sadece günlük EMA50 yönünde
+    allow_short: true
+    risk_pct_long: 1.0        # işlem başına risk (bakiyenin %'si)
+    risk_pct_short: 0.5       # short yarım risk: backtestte long taraf iki yılda da güçlü, short tutarsız
+    max_open_positions: 6
+    max_total_risk_pct: 8.0
+    min_stop_step_r: 0.1      # iz süren stop en az 0.1R ilerleyince güncellenir (Telegram mesaj kalabalığı olmasın)
+    max_signal_age_minutes: 30  # 4H kapanışından sonra en geç 30 dk içinde girilir
+    max_entry_drift_r: 0.3    # fiyat sinyal kapanışından 0.3R'den fazla kaçtıysa girilmez
+    news_filter: false        # çok günlük pozisyonlarda 4 saatlik haber filtresi test edilmedi (açılabilir)
+    guard:                    # trend için hesap koruması (kayıp serileri bu stratejide normaldir)
+      max_daily_loss_pct: 6.0
+      max_consecutive_losses: 0   # 0 = kapalı
+      cooldown_hours: 0
+      max_drawdown_pct: 35.0
 
 # ---------------------------------------------------------------------
 # Zamanlama

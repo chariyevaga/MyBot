@@ -1,18 +1,22 @@
-# SMC Trading Bot (Binance USDⓈ-M Futures)
+# Trading Bot (Binance USDⓈ-M Futures): Trend + SMC
 
-Smart Money Concepts (liquidity sweep → market structure shift → FVG / Order Block) ile
-10 büyük coinde günlük (day trade) işlem arayan, pozisyonları optimize eden, Telegram'dan
-bildirim ve komut alan, Redis + PostgreSQL ile her şeyi kaydeden bir backend.
+30 büyük coinde iki strateji çalıştıran, pozisyonları yöneten, Telegram'dan bildirim ve komut
+alan, Redis + PostgreSQL ile her şeyi kaydeden bir backend.
+
+| Strateji | Hesap | Özet |
+|---|---|---|
+| 📈 **Trend takibi** (ana strateji) | ana hesap (`paper` → `demo` → `live`) | 4H 20 mumluk kırılım + günlük EMA50 filtresi, 3×ATR iz süren stop, TP yok, pozisyonlar ~4.5 gün |
+| 👁 **SMC** (gözlem) | sanal gözlem hesabı, gerçek emir yok | Liquidity sweep → MSS → FVG/OB, 15m, günlük işlem |
 
 - İstekler ve kararlar: [REQUIREMENTS.md](REQUIREMENTS.md)
 - Algoritma: [docs/STRATEGY.md](docs/STRATEGY.md)
 - Backtest ve araştırma sonuçları: [docs/RESEARCH.md](docs/RESEARCH.md)
 
-> ⚠️ **Önemli:** 2 yıllık, 10 coinlik backtestte bu strateji (ve test edilen ~30 varyantı)
-> komisyon sonrası **tutarlı bir kâr göstermedi** (bir yıl +%17, önceki yıl −%9).
-> Bot varsayılan olarak `paper` modda gelir. Gerçek parayla çalıştırmadan önce en az
-> 4-8 hafta paper/demo sonuçlarını `python -m smcbot report` ile inceleyin.
-> Bu bir yatırım tavsiyesi değildir.
+> ⚠️ **Önemli:** Trend stratejisi 2 yıllık, 30 coinlik backtestte iki yılda da pozitifti
+> (+%48 ve +%53, en büyük düşüş ~%20). SMC ise tutarlı kâr göstermedi, bu yüzden sadece sanal
+> hesapta gözlemleniyor. Bot `paper` modda gelir; gerçek parayla çalıştırmadan önce en az 4-8 hafta
+> paper sonuçlarını `/stats` ve `python -m smcbot report` ile inceleyin. Geçmiş sonuçlar geleceği
+> garanti etmez; bu bir yatırım tavsiyesi değildir.
 
 ---
 
@@ -20,13 +24,17 @@ bildirim ve komut alan, Redis + PostgreSQL ile her şeyi kaydeden bir backend.
 
 ```
 her 5 dakikada (5m mum kapanışı + 8 sn)
- ├─ 1. temizlik   : bakiye, risk limitleri, haber takvimi, süresi dolan emirler
- ├─ 2. TARAMA     : 10 coin × (4H yön, 1H likidite, 15m sweep+MSS+FVG/OB) → uygun setup'a emir
- └─ 3. OPTİMİZE   : her açık pozisyon için break-even / kâr kilidi / trailing / 24s limiti / haber koruması
-her 15 saniyede  : emir doldu mu? → SL/TP'yi borsaya koy · pozisyon kapandı mı? → kaydet + Telegram
+ ├─ 1. temizlik   : bakiyeler, risk limitleri, haber takvimi, süresi dolan emirler
+ ├─ 2a. TREND     : yeni bir 4H mum kapandıysa 30 coinde kırılım ara → ana hesapta piyasa emri + stop
+ ├─ 2b. SMC       : 30 coin × (4H yön, 1H likidite, 15m sweep+MSS+FVG/OB) → gözlem hesabında emir
+ └─ 3. YÖNETİM    : trend → 3×ATR iz süren stop · SMC → break-even / kâr kilidi / trailing / 24s / haber
+her 15 saniyede  : emir doldu mu? → stop'u borsaya koy · pozisyon kapandı mı? → kaydet + Telegram
 ```
 
-Bir işlemin açılması için (varsayılan ayarlar):
+Trend işlemi için: 4H kapanış son 20 mumun zirvesinin (short: dibinin) ötesinde ve günlük mum EMA50'nin
+aynı tarafında. Risk long %1, short %0.5; en fazla 6 trend pozisyonu.
+
+Bir SMC işleminin açılması için (varsayılan ayarlar):
 1. 4H trend işlem yönünde,
 2. önemli bir likidite seviyesi süpürülmüş (1H swing, equal high/low, önceki gün/hafta high/low),
 3. sweep sonrası 15m'de displacement'lı (≥1 ATR gövde) market structure shift + FVG/OB,
@@ -128,9 +136,10 @@ Redis/PostgreSQL yoksa bot otomatik olarak `state/state.json` ve `state/trades.c
 | `python -m smcbot run` | Botu çalıştırır (mod: `.env`/`config.yaml`) |
 | `python -m smcbot run --once` | Tek döngü (tarama + optimizasyon) çalıştırır ve çıkar |
 | `python -m smcbot scan --hours 24` | Son 24 saatteki setup'ları gösterir, emir göndermez |
-| `python -m smcbot backtest --days 365` | Geçmiş veride test (5m veri `data/`'ya indirilir) |
-| `python -m smcbot backtest --days 365 --compare` | Optimizasyonlu / optimizasyonsuz karşılaştırma |
-| `python -m smcbot backtest --set strategy.entry_mode=limit --set risk.base_rr=3` | Ayar değiştirerek deney |
+| `python -m smcbot backtest --days 365` | Trend stratejisi geçmiş veride (5m veri `data/`'ya indirilir) |
+| `python -m smcbot backtest --days 365 --source archive` | Aynısı, Binance arşivinden (hızlı, funding dahil, API gerekmez) |
+| `python -m smcbot backtest --strategy smc --days 365 --compare` | SMC: optimizasyonlu / optimizasyonsuz karşılaştırma |
+| `python -m smcbot backtest --set strategies.trend.atr_mult=4` | Ayar değiştirerek deney |
 | `python -m smcbot backtest --save-db` | Backtest işlemlerini PostgreSQL'e yazar (aynı analiz view'ları çalışır) |
 | `python -m smcbot check` | Binance, Redis, PostgreSQL, haber, Telegram bağlantı testi |
 | `python -m smcbot news` | Yaklaşan önemli haberler ve şu an işlem engeli var mı |

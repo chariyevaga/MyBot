@@ -14,7 +14,10 @@ Durum: ✅ yapıldı · ⚙️ yapıldı ama varsayılanı araştırmaya göre a
 | 1.3 | Order Block | ✅ | Displacement'tan önceki son ters mum. Giriş bölgesi veya FVG ile çakışma (FVG+OB) |
 | 1.4 | FVG (Fair Value Gap) | ✅ | 3 mumluk boşluk, displacement bacağında, doldurulmamış olmalı. `smcbot/smc/fvg.py` |
 | 1.5 | "Araştır, daha iyisini bul" | ✅ | Eklenenler: MSS/CHoCH, displacement şartı, 4H/1H trend uyumu, killzone, premium/discount, OTE, SMT divergence, draw-on-liquidity, confluence skoru. 2 yıl / 10 coin üzerinde test edildi → `docs/RESEARCH.md` |
-| 1.6 | Günlük işlem (day trade), en az ~1 saatlik; 5-15 dk'lık scalp değil | ✅ | Yön 4H, likidite 1H, giriş 15m. Stop en az 1×ATR(1H) ve en az %0.8 → işlemler ortalama ~11 saat sürüyor. En fazla 24 saat açık kalır. |
+| 1.7 | Ağırlık (weight) sistemi | ⚙️ | Meta-labeling modeli (OI, funding, taker hacmi, long/short, volatilite, momentum...) 30 coin / 8.496 SMC setup üzerinde test edildi: kazananı ayıramadı (AUC 0.51) → kullanılmıyor. Veriyle desteklenen ağırlık: trend'de long tam, short yarım risk. |
+| 1.8 | İkinci strateji: trend takibi | ✅ | **Ana strateji.** 4H 20 mum Donchian kırılımı + günlük EMA50 + 3×ATR iz süren stop, TP yok. Backtest: 2024-25 +%48, 2025-26 +%53 (DD ~%20). `smcbot/trend.py` |
+| 1.9 | SMC'nin durumu | ⚙️ | Kullanıcı kararı: **gözlem hesabında** (her zaman sanal, gerçek emir yok) çalışmaya devam eder, ayrı istatistik tutar. `strategies.smc.account: shadow` |
+| 1.6 | Günlük işlem (day trade), en az ~1 saatlik; 5-15 dk'lık scalp değil | ✅ SMC / ⚙️ Trend | Yön 4H, likidite 1H, giriş 15m. Stop en az 1×ATR(1H) ve en az %0.8 → işlemler ortalama ~11 saat sürüyor. En fazla 24 saat açık kalır. |
 
 ## 2. Risk ve hedef
 
@@ -22,7 +25,8 @@ Durum: ✅ yapıldı · ⚙️ yapıldı ama varsayılanı araştırmaya göre a
 |---|---|---|---|
 | 2.1 | İşlem başına risk en fazla bakiyenin %4'ü | ⚙️ | Kodda sert sınır 4.0 (`config.py`). **Varsayılan %2**: backtestte skor sonucu tahmin etmedi ve %4 riskte kötü yılda drawdown %60+'ya çıkıyor. `config.yaml > risk.tiers` ile %4'e kadar çıkarılabilir. |
 | 2.2 | RR normalde 2:1, en fazla 3:1 | ✅ | `risk.base_rr: 2.0`, `risk.max_rr: 3.0` (kodda da 3.0 ile sınırlı). A+ setup'ta 3R. |
-| 2.3 | Zaten işlem varsa yeni işlem açma | ⚙️ | 10 coin istendiği için: **aynı coinde en fazla 1 pozisyon/emir** + **toplamda en fazla 3 pozisyon** (`max_open_positions`) + toplam açık risk en fazla %10. Tek pozisyon isteniyorsa `max_open_positions: 1` yapın. |
+| 2.3 | Zaten işlem varsa yeni işlem açma | ⚙️ | Aynı coinde en fazla 1 pozisyon. Trend: en fazla 6 pozisyon, toplam risk %8. SMC (gözlem): en fazla 3. |
+| 2.5 | Trend riski | ✅ | Kullanıcı kararı: **long %1, short %0.5**. Trend pozisyonları **birkaç gün** açık kalabilir (kullanıcı onayladı; 24 saat sınırıyla avantaj kayboluyordu). |
 | 2.4 | (Eklendi) Hesap koruma | ✅ | Günlük zarar limiti %6, 3 ardışık zararda 6 saat mola, %25 drawdown'da durma, coin başına 60 dk bekleme. |
 
 ## 3. Tarama ve zamanlama
@@ -46,6 +50,7 @@ Durum: ✅ yapıldı · ⚙️ yapıldı ama varsayılanı araştırmaya göre a
 
 | # | İstek | Durum | Nasıl / Nerede |
 |---|---|---|---|
+| 5.2 | 30 coin (düşük maliyetli / önerilen) | ✅ | 2 yıldan uzun listelenmiş, son 3 ayda en yüksek hacimli 30 kripto; aşırı oynak küçük coinler hariç (`research/universe.py`). Komisyon yüzdesi tüm coinlerde aynı; farkı kayma (likidite) yapar. |
 | 5.1 | En popüler 10 coin | ⚙️ | Piyasa değerine göre: BTC, ETH, XRP, BNB, SOL, DOGE, ADA, TRX, LINK, AVAX. Hacme göre otomatik seçim (`universe.mode: top_volume`) de var ama hacim listesinde XAU/SOXL gibi TradFi kontratları çıkıyor; sadece kripto (`underlyingType=COIN`) ve 180 günden eski listeler alınır. |
 
 ## 6. Haber filtresi
@@ -53,7 +58,7 @@ Durum: ✅ yapıldı · ⚙️ yapıldı ama varsayılanı araştırmaya göre a
 | # | İstek | Durum | Nasıl / Nerede |
 |---|---|---|---|
 | 6.1 | Haber günlerini ve saatlerini bir yerden al | ✅ | ForexFactory haftalık takvimi (bu hafta + gelecek hafta), saatte bir yenilenir, Redis'te cache. `smcbot/news.py` |
-| 6.2 | İşleme girmeden önce 4 saat içinde haber var mı kontrol et | ✅ | USD + yüksek etkili haber 4 saat içindeyse (veya son 30 dk içinde olduysa) yeni işlem açılmaz. Veri alınamazsa güvenli mod (işlem yok). |
+| 6.2 | İşleme girmeden önce 4 saat içinde haber var mı kontrol et | ✅ SMC / ⚙️ Trend | SMC: USD + yüksek etkili haber 4 saat içindeyse (veya son 30 dk içinde olduysa) yeni işlem açılmaz. Trend: varsayılan **kapalı** (çok günlük pozisyonlarda test edilemedi) → `strategies.trend.news_filter: true` ile açılabilir. |
 | 6.3 | (Eklendi) Haber öncesi pozisyon koruması | ✅ | Haberden 30 dk önce kârdaki (+0.5R) pozisyonun stopu girişe çekilir. |
 
 ## 7. Telegram
@@ -83,7 +88,7 @@ Durum: ✅ yapıldı · ⚙️ yapıldı ama varsayılanı araştırmaya göre a
 
 ## Açık konular / karar bekleyenler
 
-- ⚠️ **Canlı para**: 2 yıllık backtestte kanıtlanmış bir avantaj yok (bkz. `docs/RESEARCH.md`). Önce en az 4-8 hafta `paper` veya `demo` önerilir.
-- Tek pozisyon mu, 3 pozisyon mu? (2.3)
-- Risk %2 mi, %4 mü? (2.1)
+- ⚠️ **Canlı para**: Trend stratejisi backtestte iki yılda da pozitif, ama canlı (paper) sonuçlar henüz yok. Önce en az 4-8 hafta `paper`, sonra kısa bir `demo`, sonra 100 USD ile `live` planlandı.
+- **100 USD ile canlı**: trend stopları ortalama fiyatın %8'i uzakta; %1 riskle pozisyon ~12 USD olur. BTC (en az 50 USDT) ve ETH (en az 20 USDT) açılamaz, altcoinler açılabilir.
+- **"10-15" beklentisi**: aylık getiri mi, maksimum düşüş toleransı mı? Düşüş toleransıysa trend riskini %0.5'e indirmek gerekir (backtestte %1 ile düşüş ~%20).
 - Telegram saat dilimi `Asia/Ashgabat` (UTC+5) olarak ayarlandı; farklıysa `telegram.display_timezone`.

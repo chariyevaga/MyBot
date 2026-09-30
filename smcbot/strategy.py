@@ -44,7 +44,7 @@ class Setup:
     expires_at: pd.Timestamp
     entry: float
     sl: float
-    tp: float
+    tp: float | None  # None = no take-profit (trend strategy)
     tp_r: float
     score: int
     reasons: list[str]
@@ -58,6 +58,7 @@ class Setup:
     atr_ltf: float
     atr_mtf: float
     features: dict = field(default_factory=dict)
+    strategy: str = "smc"
 
     @property
     def dir(self) -> int:

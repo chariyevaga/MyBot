@@ -32,15 +32,44 @@ SLIPPAGE = 0.0002  # on stop / market exits
 STEP_NS = 300 * 1_000_000_000
 
 
+def _frames(df5: pd.DataFrame) -> dict:
+    df5 = df5[["open", "high", "low", "close", "volume"]]
+    return {"exec": df5, "ltf": resample(df5, "15m"), "mtf": resample(df5, "1h"), "htf": resample(df5, "4h"),
+            "d1": resample(df5, "1d")}
+
+
 def load_data(md: MarketData, symbols: list[str], start: pd.Timestamp, end: pd.Timestamp,
               warmup_days: int) -> dict[str, dict]:
+    """History through the exchange API (ccxt)."""
     data = {}
     for sym in symbols:
         df5 = md.history(sym, "5m", start - pd.Timedelta(days=warmup_days), end)
         if len(df5) < 5000:
             log.warning("%s için yeterli veri yok, atlandı", sym)
             continue
-        data[sym] = {"exec": df5, "ltf": resample(df5, "15m"), "mtf": resample(df5, "1h"), "htf": resample(df5, "4h")}
+        data[sym] = _frames(df5)
+    return data
+
+
+def load_data_archive(symbols: list[str], start: pd.Timestamp, end: pd.Timestamp,
+                      warmup_days: int) -> dict[str, dict]:
+    """History from data.binance.vision (faster, includes funding; no API access needed)."""
+    from .archive import funding, klines
+
+    data = {}
+    s = (start - pd.Timedelta(days=warmup_days)).strftime("%Y-%m-%d")
+    e = end.strftime("%Y-%m-%d")
+    for sym in symbols:
+        raw = sym.split("/")[0] + "USDT"
+        df5 = klines(raw, "5m", s, e)
+        if len(df5) < 5000:
+            log.warning("%s için arşivde yeterli veri yok, atlandı", sym)
+            continue
+        fr = _frames(df5)
+        f = funding(raw, s, e)
+        fr["funding"] = f["funding"] if not f.empty else None
+        data[sym] = fr
+        log.info("%s arşivden yüklendi (%d mum)", sym, len(df5))
     return data
 
 
@@ -239,6 +268,141 @@ def run_backtest(cfg, data: dict[str, dict], start: pd.Timestamp, end: pd.Timest
     curve.append((end_ts, balance))
     return {"trades": closed, "curve": curve, "start_balance": start_balance, "end_balance": balance,
             "setups": n_setups, "start": start, "end": end, "optimizer": use_optimizer}
+
+
+def run_trend_backtest(cfg, data: dict[str, dict], start: pd.Timestamp, end: pd.Timestamp,
+                       start_balance: float = 1000.0, trade_symbols: list[str] | None = None) -> dict:
+    """4H trend strategy: stop orders checked on each 4H candle's range, trailing stop updated on
+    the close, entries at the breakout candle close. Funding is charged when archive data has it."""
+    from . import trend
+
+    tc, fees = cfg.strategies.trend, cfg.risk.fees
+    h4_ns = 4 * 3600 * 1_000_000_000
+    states, bars, sig_at, n_signals = {}, {}, defaultdict(list), 0
+    for sym, fr in data.items():
+        st = trend.analyze(fr["htf"], fr.get("d1") if fr.get("d1") is not None else resample(fr["exec"], "1d"), tc)
+        states[sym] = st
+        bars[sym] = dict(zip(index_ns(fr["htf"].index).tolist(), range(len(fr["htf"]))))
+        if trade_symbols and sym not in trade_symbols:
+            continue
+        for s in trend.signals(sym, st, tc, ts_ns(start)):
+            if s.created_at < end:
+                sig_at[ts_ns(s.created_at)].append(s)
+                n_signals += 1
+    order = {sym: i for i, sym in enumerate(data)}
+    timeline = sorted({t for sym in bars for t in bars[sym] if ts_ns(start) <= t < ts_ns(end)})
+
+    balance = start_balance
+    guard = RiskGuard(tc.guard, MemoryKV())
+    open_: dict[str, Trade] = {}
+    best: dict[str, float] = {}
+    closed: list[Trade] = []
+    curve = []
+    last_close: dict[str, float] = {}
+
+    def ohlc(sym, t_open):
+        i = bars[sym].get(t_open)
+        if i is None:
+            return None, None
+        h4 = data[sym]["htf"]
+        return i, (h4["open"].iat[i], h4["high"].iat[i], h4["low"].iat[i], h4["close"].iat[i])
+
+    def equity_now():
+        return balance + sum(t.dir * (last_close.get(t.symbol, t.open_price) - t.open_price) * t.filled_qty
+                             for t in open_.values())
+
+    def close_trade(t: Trade, px: float, now: pd.Timestamp, reason: str):
+        nonlocal balance
+        px *= 1 - t.dir * SLIPPAGE
+        gross = t.dir * (px - t.open_price) * t.filled_qty
+        fee = px * t.filled_qty * fees.taker
+        balance += gross - fee
+        t.fees += fee
+        t.status, t.closed_at, t.exit_price, t.exit_reason = "closed", to_iso(now), px, reason
+        if t.mae_price is None or t.dir * (px - t.mae_price) < 0:
+            t.mae_price = px
+        t.pnl = gross - t.fees
+        t.r_multiple = t.r_at(px)
+        guard.register_close(t.pnl, now)
+        open_.pop(t.symbol, None)
+        closed.append(t)
+
+    for t_open in timeline:
+        t_close = t_open + h4_ns
+        now = pd.Timestamp(t_close, tz="UTC")
+        # 1) funding + stop orders during the candle
+        for sym, t in list(open_.items()):
+            i, b = ohlc(sym, t_open)
+            if b is None:
+                continue
+            o, h, lo, c = b
+            f = data[sym].get("funding")
+            if f is not None:
+                rates = f[(f.index > pd.Timestamp(t_open, tz="UTC")) & (f.index <= now)]
+                if len(rates):
+                    cost = float(rates.sum()) * t.dir * t.filled_qty * c
+                    balance -= cost
+                    t.fees += cost
+            if (lo <= t.sl) if t.dir == 1 else (h >= t.sl):
+                px = min(o, t.sl) if t.dir == 1 else max(o, t.sl)
+                close_trade(t, px, now, "SL" if t.r_at(t.sl) < -0.2 else "Trailing stop")
+        for sym in bars:
+            _, b = ohlc(sym, t_open)
+            if b is not None:
+                last_close[sym] = b[3]
+        eq = equity_now()
+        guard.on_cycle(eq, now)
+        # 2) trailing stop update for positions opened before this candle
+        for sym, t in list(open_.items()):
+            i, b = ohlc(sym, t_open)
+            if b is None:
+                continue
+            o, h, lo, c = b
+            fav, adv = (h, lo) if t.dir == 1 else (lo, h)
+            t.mfe_price = fav if t.dir * (fav - t.mfe_price) > 0 else t.mfe_price
+            t.mae_price = adv if t.dir * (adv - t.mae_price) < 0 else t.mae_price
+            best[sym] = max(best[sym], c) if t.dir == 1 else min(best[sym], c)
+            cand = trend.chandelier(best[sym], states[sym].atr[i], t.dir, tc.atr_mult)
+            if t.dir * (c - cand) <= 0:
+                close_trade(t, c, now, "Trailing stop")
+            elif t.dir * (cand - t.sl) >= tc.min_stop_step_r * t.risk_unit:
+                t.sl = cand
+                t.be_done = t.be_done or t.r_at(cand) >= 0
+        # 3) new breakouts at this close
+        for s in sorted(sig_at.get(t_close, []), key=lambda x: order[x.symbol]):
+            if not guard.can_open(now)[0] or s.symbol in open_ or len(open_) >= tc.max_open_positions:
+                continue
+            risk_pct = tc.risk_pct_long if s.side == "long" else tc.risk_pct_short
+            room = eq * tc.max_total_risk_pct / 100 - sum(t.current_risk_usd() for t in open_.values())
+            if room < eq * risk_pct / 100:
+                if room < eq * 0.002:
+                    continue
+                risk_pct = room / eq * 100
+            qty, _ = position_size(eq, s.entry, s.sl, risk_pct, fees)
+            if qty * s.entry < 5:
+                continue
+            fill = s.entry * (1 + s.dir * SLIPPAGE)
+            fee = fill * qty * fees.taker
+            balance -= fee
+            risk_usd = qty * (abs(s.entry - s.sl) + s.entry * (fees.maker + fees.taker))
+            t = Trade(id=f"{base_of(s.symbol)}-{s.created_at:%Y%m%d%H%M}-T{s.side[0].upper()}", symbol=s.symbol,
+                      side=s.side, status="open", setup_id=s.id, score=0, reasons=s.reasons, poi=s.poi, swept=[],
+                      entry=s.entry, sl=s.sl, tp=None, initial_sl=s.sl, initial_tp=None, tp_r=0.0, qty=qty,
+                      risk_pct=risk_usd / eq * 100, risk_usd=risk_usd, leverage=1, created_at=to_iso(s.created_at),
+                      expires_at=to_iso(s.expires_at), cancel_price=None, setup=s.to_dict(), strategy="trend",
+                      fill_price=fill, filled_qty=qty, filled_at=to_iso(now), fees=fee)
+            t.mfe_price = t.mae_price = fill
+            open_[s.symbol] = t
+            best[s.symbol] = s.entry
+        if t_open % (86400 * 1_000_000_000) == 0:
+            curve.append((now, equity_now()))
+
+    end_ts = pd.Timestamp(timeline[-1] + h4_ns, tz="UTC") if timeline else end
+    for sym, t in list(open_.items()):
+        close_trade(t, last_close.get(sym, t.open_price), end_ts, "Backtest sonu")
+    curve.append((end_ts, balance))
+    return {"trades": closed, "curve": curve, "start_balance": start_balance, "end_balance": balance,
+            "setups": n_signals, "start": start, "end": end, "optimizer": True, "strategy": "trend"}
 
 
 # ---------------------------------------------------------------------- reporting

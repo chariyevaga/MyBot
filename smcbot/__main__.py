@@ -62,29 +62,34 @@ def cmd_scan(cfg, args):
 
 
 def cmd_backtest(cfg, args):
-    from .backtest import load_data, run_backtest, save_results, summarize, to_journal
-    from .engine import resolve_universe
+    from .backtest import load_data, load_data_archive, run_backtest, run_trend_backtest, save_results, summarize, \
+        to_journal
     from .market_data import MarketData
 
-    ex = ccxt.binanceusdm({"enableRateLimit": True})
-    ex.load_markets()
-    md = MarketData(ex)
-    symbols = [ccxt_symbol(s.strip().upper(), cfg.quote) for s in args.symbols.split(",")] if args.symbols \
-        else resolve_universe(ex, cfg)
+    requested = [ccxt_symbol(s.strip().upper(), cfg.quote) for s in args.symbols.split(",")] if args.symbols else None
+    symbols = list(requested or [ccxt_symbol(b, cfg.quote) for b in cfg.universe.symbols])
     for sym in (ccxt_symbol("BTC", cfg.quote), ccxt_symbol("ETH", cfg.quote)):
         if sym not in symbols:
             symbols.append(sym)  # SMT references
     end = pd.Timestamp(args.end, tz="UTC") if args.end else now_utc().floor("1D")
     start = end - pd.Timedelta(days=args.days)
-    log.info("Backtest %s → %s | %s", start.date(), end.date(), ",".join(base_of(s) for s in symbols))
-    data = load_data(md, symbols, start, end, warmup_days=45)
-    trade_symbols = None
-    if args.symbols:  # BTC/ETH are still loaded as SMT references but only the requested coins are traded
-        trade_symbols = [ccxt_symbol(s.strip().upper(), cfg.quote) for s in args.symbols.split(",")]
-    runs = [True, False] if args.compare else [not args.no_optimizer]
+    warmup = 90 if args.strategy == "trend" else 45  # daily EMA50 needs a longer warm-up
+    log.info("Backtest [%s] %s → %s | %s", args.strategy, start.date(), end.date(),
+             ",".join(base_of(s) for s in symbols))
+    if args.source == "archive":
+        data = load_data_archive(symbols, start, end, warmup_days=warmup)
+    else:
+        ex = ccxt.binanceusdm({"enableRateLimit": True})
+        ex.load_markets()
+        data = load_data(MarketData(ex), symbols, start, end, warmup_days=warmup)
+    trade_symbols = requested  # BTC/ETH may be loaded only as SMT references
+    runs = [True, False] if (args.compare and args.strategy == "smc") else [not args.no_optimizer]
     for use_opt in runs:
-        res = run_backtest(cfg, data, start, end, use_optimizer=use_opt, start_balance=args.balance,
-                           trade_symbols=trade_symbols)
+        if args.strategy == "trend":
+            res = run_trend_backtest(cfg, data, start, end, start_balance=args.balance, trade_symbols=trade_symbols)
+        else:
+            res = run_backtest(cfg, data, start, end, use_optimizer=use_opt, start_balance=args.balance,
+                               trade_symbols=trade_symbols)
         summary = summarize(res)
         path = save_results(res, summary)
         print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
@@ -223,6 +228,9 @@ def main():
     sp.add_argument("--hours", type=float, default=24)
     bp = sub.add_parser("backtest")
     bp.add_argument("--days", type=int, default=120)
+    bp.add_argument("--strategy", choices=["trend", "smc"], default="trend")
+    bp.add_argument("--source", choices=["api", "archive"], default="api",
+                    help="api = Binance API (ccxt) | archive = data.binance.vision (hızlı, funding dahil)")
     bp.add_argument("--end", default=None, help="YYYY-MM-DD (varsayılan: bugün)")
     bp.add_argument("--symbols", default=None, help="BTC,ETH,... (varsayılan: config)")
     bp.add_argument("--balance", type=float, default=1000.0)

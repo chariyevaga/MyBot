@@ -1,5 +1,19 @@
 # Araştırma ve Backtest Sonuçları
 
+## Özet (güncel)
+
+| Strateji | 2024-25 | 2025-26 | Karar |
+|---|---|---|---|
+| SMC (sweep → MSS → FVG/OB), 10 coin | −%9 | +%17.6 | Tutarlı avantaj yok → **gözlem hesabında** (sanal) |
+| SMC + ağırlık modeli (meta-labeling), 30 coin | model AUC 0.51 | model AUC 0.52 | Model kazananı ayıramadı → kullanılmıyor |
+| **4H trend takibi**, 30 coin, long %1 / short %0.5 risk | **+%48.0** (DD %19.5) | **+%52.6** (DD %19.9) | **Ana strateji** (önce paper) |
+
+Detaylar: [Tur 2](#tur-2-30-coin-ağırlık-sistemi-ve-trend-takibi) (aşağıda), ilk tur SMC araştırması hemen altında.
+
+---
+
+# Tur 1: SMC araştırması
+
 Tarih: 2026-09-30 · Veri: Binance USDⓈ-M, 5 dakikalık mumlar, 10 coin (BTC, ETH, XRP, BNB, SOL,
 DOGE, ADA, TRX, LINK, AVAX), 2024-09-30 → 2026-09-30.
 
@@ -109,3 +123,88 @@ Erken çıkış kuralları (yapı, zaman, 1H dönüş) ve TP uzatma performansı
 - Denemeye değer fikirler: sadece PDH/PDL + PWH/PWL sweep'leri; 1H zaman diliminde aynı model
   (daha az işlem, daha geniş stop, daha düşük komisyon yükü); maker (post-only) çıkışlar;
   funding rate / open interest filtreleri.
+
+---
+
+# Tur 2: 30 coin, ağırlık sistemi ve trend takibi
+
+Veri: Binance arşivi (data.binance.vision), 30 coin, 5 dakikalık mumlar + taker alış hacmi,
+5 dakikalık open interest ve long/short oranları, funding. 2024-07 → 2026-09.
+
+Coinler (2 yıldan uzun listelenmiş, son 3 ayın en yüksek hacmi, günlük ortalama hareketi %20'nin
+altında): BTC, ETH, SOL, XRP, DOGE, BNB, ADA, LINK, AVAX, TRX, ZEC, WLD, 1000PEPE, NEAR, ENA, SUI,
+TAO, XLM, AAVE, UNI, BCH, ONDO, FIL, LTC, DOT, 1000SHIB, INJ, XMR, ARB, FET.
+
+Tekrar üretmek için:
+
+```bash
+python -m research.download            # veriyi indir (~30 dk, data/research/)
+python -m research.dataset             # 8.496 SMC setup + özellikler + sonuç
+python -m research.meta_model          # ağırlık modeli, iki yönlü walk-forward
+python -m research.trend --n 20 --atr-mult 3
+python -m smcbot backtest --strategy trend --source archive --days 365 --end 2025-09-30
+```
+
+## Ağırlık sistemi (meta-labeling) — olumsuz
+
+- 8.496 SMC setup (gevşek filtre), her birine ~45 özellik: SMC özellikleri + open interest değişimi
+  (sweep sırasında / 24 saat), funding (seviye, z-skoru), taker alış oranı (son 1 saat / displacement
+  bacağı), long/short oranları, volatilite rejimi, çok ufuklu momentum, BTC durumu, saat/gün.
+- Etiket: 2R hedef, stop, 24 saat sınırı (üçlü bariyer), komisyon dahil.
+- Lojistik regresyon ve gradient boosting; 2024-25'te öğren → 2025-26'da test, ve tersi.
+
+| | Y1→Y2 lojistik | Y1→Y2 GBM | Y2→Y1 lojistik | Y2→Y1 GBM |
+|---|---|---|---|---|
+| AUC (0.50 = yazı-tura) | 0.522 | 0.510 | 0.517 | 0.502 |
+| Tüm setup'lar R | −0.068 | −0.068 | −0.091 | −0.091 |
+| Modelin en iyi %20'si R | −0.054 | −0.103 | −0.053 | −0.087 |
+
+- Komisyonsuz kazanma ile en güçlü korelasyon 0.05 (pratikte sıfır). Net R ile görülen "güçlü"
+  korelasyonlar (stop genişliği, volatilite) komisyon etkisidir: geniş stopta komisyon R'nin daha
+  küçük kısmı.
+- 4H trend uyumu kazanmayı artırmıyor (korelasyon −0.04 / −0.01).
+- Sonuç: SMC setup'larında öğrenilebilir bir avantaj yok; ağırlık modeli olmayan avantajı yaratamaz.
+
+## Trend takibi (4H Donchian kırılımı + günlük EMA50 filtresi + 3×ATR iz süren stop)
+
+Tüm sinyaller (portföy sınırı olmadan), işlem başına net R (komisyon + kayma + funding dahil):
+
+| Ayar | 2024-25 | 2025-26 |
+|---|---|---|
+| **20 mum, 3×ATR, filtreli (varsayılan)** | +0.083 (n=1249) | +0.119 (n=1132) |
+| 55 mum | +0.094 | +0.139 |
+| 2×ATR | +0.060 | +0.075 |
+| 4×ATR | +0.106 | +0.134 |
+| Filtresiz | +0.108 | +0.029 |
+| Sadece long | **+0.262** | **+0.204** |
+| En fazla 24 saat tutma | +0.015 | +0.021 |
+| En fazla 72 saat tutma | +0.023 | +0.020 |
+
+Sağlamlık (varsayılan ayar, 2 yıl, 2.381 işlem):
+- Bootstrap %95 güven aralığı: [+0.026, +0.184] R; ortalamanın > 0 olma olasılığı %99.8.
+- 8 tam çeyreğin 7'si pozitif; 30 coinin 22'si pozitif.
+- Long: +0.26 / +0.21 R (iki yıl da güçlü) · Short: −0.11 / +0.07 R (tutarsız) → short yarım risk.
+- Kazanma oranı ~%36, medyan işlem −0.36R. Kâr az sayıda büyük trendden gelir (en iyi 20 işlem
+  toplam kârın tamamı; XLM tek işlemde +77R). En uzun kayıp serisi 29 işlem.
+- Ortalama tutma süresi ~4.5 gün; 24 saat sınırıyla avantaj kaybolur.
+- Ortalama stop mesafesi fiyatın %8'i → küçük hesaplarda BTC (min 50 USDT) / ETH (min 20 USDT)
+  pozisyonu açılamayabilir.
+
+### Botun kendi backtest'i (canlı kodla aynı; long %1 / short %0.5, max 6 pozisyon, toplam risk %8)
+
+| | 2024-25 | 2025-26 |
+|---|---|---|
+| İşlem | 422 | 392 |
+| Getiri | +%48.0 | +%52.6 |
+| En büyük düşüş | %19.5 | %19.9 |
+| Kazanma oranı | %41 | %36 |
+| Net R / işlem | +0.095 | +0.158 |
+| Kâr faktörü | 1.33 | 1.39 |
+| Ortalama süre | 107 saat | 115 saat |
+| Long / short R | +0.27 / −0.05 | +0.23 / +0.15 |
+
+Hesap korumaları (günlük %6 zarar, %35 drawdown) bu iki yılda devreye girmedi. Haber filtresi
+trend için kapalı (geçmiş takvim olmadığı için test edilemedi).
+
+**Beklenti yönetimi:** iyi yıllarda ayda ortalama %3-5, arada %20'ye varan düşüşler ve uzun kayıp
+serileri. Aylık %10-15 bu stratejiyle gerçekçi değil. Geçmiş sonuç geleceği garanti etmez.

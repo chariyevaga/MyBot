@@ -20,9 +20,9 @@ class Trade:
     swept: list
     entry: float               # planned (limit) entry
     sl: float                  # current stop
-    tp: float                  # current take profit
+    tp: float | None           # current take profit (None = trailing stop only)
     initial_sl: float
-    initial_tp: float
+    initial_tp: float | None
     tp_r: float
     qty: float
     risk_pct: float
@@ -30,8 +30,10 @@ class Trade:
     leverage: int
     created_at: str
     expires_at: str
-    cancel_price: float        # cancel the pending order if price reaches this before filling
+    cancel_price: float | None  # cancel the pending order if price reaches this before filling
     targets: list = field(default_factory=list)
+    strategy: str = "smc"      # smc | trend
+    account: str = "main"      # main (paper/demo/live) | shadow (always virtual, observation)
     setup: dict = field(default_factory=dict)
     entry_order_id: str | None = None
     entry_open: bool = True

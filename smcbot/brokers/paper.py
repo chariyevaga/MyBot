@@ -21,20 +21,21 @@ KEY = "paper:account"
 
 
 class PaperBroker(Broker):
-    def __init__(self, md: MarketData, kv, start_balance: float, fees):
+    def __init__(self, md: MarketData, kv, start_balance: float, fees, key: str = KEY):
         self.md = md
         self.exchange = md.ex
         if not self.exchange.markets:
             self.exchange.load_markets()
         self.kv = kv
         self.fees = fees
-        self.a = kv.get_json(KEY) or {
+        self.key = key
+        self.a = kv.get_json(key) or {
             "balance": float(start_balance), "orders": {}, "positions": {}, "closed": [], "cursor": {}, "last": {},
         }
         self._save()
 
     def _save(self):
-        self.kv.set_json(KEY, self.a)
+        self.kv.set_json(self.key, self.a)
 
     # ------------------------------------------------------------------
     def sync(self) -> None:
