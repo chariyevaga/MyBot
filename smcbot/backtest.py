@@ -293,12 +293,26 @@ def run_trend_backtest(cfg, data: dict[str, dict], start: pd.Timestamp, end: pd.
     timeline = sorted({t for sym in bars for t in bars[sym] if ts_ns(start) <= t < ts_ns(end)})
 
     balance = start_balance
+    peak = start_balance
     guard = RiskGuard(tc.guard, MemoryKV())
     open_: dict[str, Trade] = {}
     best: dict[str, float] = {}
+    partial_gross: dict[str, float] = {}
     closed: list[Trade] = []
     curve = []
     last_close: dict[str, float] = {}
+    skipped = Counter()
+    # optional BTC market-regime filter: trade only in the direction of BTC's daily close vs EMA
+    regime_n = int(tc.get("btc_regime_ema", 0) or 0)
+    btc_sym = ccxt_symbol("BTC", cfg.quote)
+    if regime_n and btc_sym in data:
+        bd = data[btc_sym]["d1"] if data[btc_sym].get("d1") is not None else resample(data[btc_sym]["exec"], "1d")
+        reg_close_ns = index_ns(bd.index) + 86400 * 1_000_000_000
+        reg_val = np.sign(bd["close"] - bd["close"].ewm(span=regime_n, adjust=False).mean()).to_numpy()
+    else:
+        regime_n = 0
+    ptp_r = float(tc.get("partial_tp_r", 0) or 0)
+    ptp_frac = float(tc.get("partial_tp_frac", 0.5) or 0.5)
 
     def ohlc(sym, t_open):
         i = bars[sym].get(t_open)
@@ -321,7 +335,7 @@ def run_trend_backtest(cfg, data: dict[str, dict], start: pd.Timestamp, end: pd.
         t.status, t.closed_at, t.exit_price, t.exit_reason = "closed", to_iso(now), px, reason
         if t.mae_price is None or t.dir * (px - t.mae_price) < 0:
             t.mae_price = px
-        t.pnl = gross - t.fees
+        t.pnl = gross + partial_gross.pop(t.id, 0.0) - t.fees
         t.r_multiple = t.r_at(px)
         guard.register_close(t.pnl, now)
         open_.pop(t.symbol, None)
@@ -346,11 +360,26 @@ def run_trend_backtest(cfg, data: dict[str, dict], start: pd.Timestamp, end: pd.
             if (lo <= t.sl) if t.dir == 1 else (h >= t.sl):
                 px = min(o, t.sl) if t.dir == 1 else max(o, t.sl)
                 close_trade(t, px, now, "SL" if t.r_at(t.sl) < -0.2 else "Trailing stop")
+                continue
+            if ptp_r and t.id not in partial_gross:  # optional partial take-profit
+                level = t.price_at_r(ptp_r)
+                if (h >= level) if t.dir == 1 else (lo <= level):
+                    q = t.filled_qty * ptp_frac
+                    px = level * (1 - t.dir * SLIPPAGE)
+                    gross = t.dir * (px - t.open_price) * q
+                    fee = px * q * fees.taker
+                    balance += gross - fee
+                    t.fees += fee
+                    partial_gross[t.id] = gross
+                    t.filled_qty -= q
+                    if tc.get("partial_be", True) and t.dir * (t.open_price - t.sl) > 0:
+                        t.sl = t.open_price
         for sym in bars:
             _, b = ohlc(sym, t_open)
             if b is not None:
                 last_close[sym] = b[3]
         eq = equity_now()
+        peak = max(peak, eq)
         guard.on_cycle(eq, now)
         # 2) trailing stop update for positions opened before this candle
         for sym, t in list(open_.items()):
@@ -372,7 +401,17 @@ def run_trend_backtest(cfg, data: dict[str, dict], start: pd.Timestamp, end: pd.
         for s in sorted(sig_at.get(t_close, []), key=lambda x: order[x.symbol]):
             if not guard.can_open(now)[0] or s.symbol in open_ or len(open_) >= tc.max_open_positions:
                 continue
-            risk_pct = tc.risk_pct_long if s.side == "long" else tc.risk_pct_short
+            if regime_n:
+                ri = int(np.searchsorted(reg_close_ns, t_close, side="right")) - 1
+                if ri < 0 or reg_val[ri] != s.dir:
+                    skipped["btc_regime"] += 1
+                    continue
+            mult, _ = trend.risk_multiplier(s, tc)
+            if mult <= 0:
+                skipped["rules"] += 1
+                continue
+            risk_pct = (tc.risk_pct_long if s.side == "long" else tc.risk_pct_short) * mult
+            risk_pct *= trend.drawdown_multiplier(peak, eq, tc)
             room = eq * tc.max_total_risk_pct / 100 - sum(t.current_risk_usd() for t in open_.values())
             if room < eq * risk_pct / 100:
                 if room < eq * 0.002:
@@ -402,7 +441,8 @@ def run_trend_backtest(cfg, data: dict[str, dict], start: pd.Timestamp, end: pd.
         close_trade(t, last_close.get(sym, t.open_price), end_ts, "Backtest sonu")
     curve.append((end_ts, balance))
     return {"trades": closed, "curve": curve, "start_balance": start_balance, "end_balance": balance,
-            "setups": n_signals, "start": start, "end": end, "optimizer": True, "strategy": "trend"}
+            "setups": n_signals, "start": start, "end": end, "optimizer": True, "strategy": "trend",
+            "skipped": dict(skipped)}
 
 
 # ---------------------------------------------------------------------- reporting

@@ -7,6 +7,7 @@
 | SMC (sweep → MSS → FVG/OB), 10 coin | −%9 | +%17.6 | Tutarlı avantaj yok → **gözlem hesabında** (sanal) |
 | SMC + ağırlık modeli (meta-labeling), 30 coin | model AUC 0.51 | model AUC 0.52 | Model kazananı ayıramadı → kullanılmıyor |
 | **4H trend takibi**, 30 coin, long %1 / short %0.5 risk | **+%48.0** (DD %19.5) | **+%52.6** (DD %19.9) | **Ana strateji** (önce paper) |
+| Trend + **R3 kuralı** (7 günde >%9 hareket etmişse yarım risk) | +%46.5 (DD %16.1) | +%46.6 (DD %17.7) | **Güncel varsayılan** — bağımsız 2023-24 yılında da düşüşü azalttı ([Tur 3](#tur-3-canlı-haftanın-analizi-ve-aylık-tutarlılık-optimizasyonu)) |
 
 Detaylar: [Tur 2](#tur-2-30-coin-ağırlık-sistemi-ve-trend-takibi) (aşağıda), ilk tur SMC araştırması hemen altında.
 
@@ -208,3 +209,46 @@ trend için kapalı (geçmiş takvim olmadığı için test edilemedi).
 
 **Beklenti yönetimi:** iyi yıllarda ayda ortalama %3-5, arada %20'ye varan düşüşler ve uzun kayıp
 serileri. Aylık %10-15 bu stratejiyle gerçekçi değil. Geçmiş sonuç geleceği garanti etmez.
+
+
+---
+
+# Tur 3: Canlı haftanın analizi ve aylık tutarlılık optimizasyonu
+
+Tarih: 2026-10-07. Hedef: ayda en az +%2.
+
+## İlk canlı (paper) hafta neden kaybetti?
+
+- Canlı sonuç −%3.7, aynı haftanın backtest'i −%3.3; **açılan/kapanan işlemler birebir aynı** → yazılım hatası yok.
+- 2-3 Ekim'de 7 long açıldı, 7 Ekim 04:00 UTC'deki düşüşte 5'i birlikte stop oldu.
+- Girişlerde: coinlerin %93'ü günlük EMA50 üstündeydi (piyasa geneli aşırı yükselmiş), kırılımlar zayıftı
+  (0.05-0.46 ATR), bazı coinler son 7 günde +%21-26 yükselmişti. Hepsi önce +0.2-0.8R kâra geçti, sonra döndü.
+- Backtest'te bile haftaların %60'ı negatif; bu hafta istatistiksel olarak olağan.
+
+## 2 yıllık işlem bağlam analizi (`research/trend_analysis.py`, 811 işlem)
+
+İki yılda da aynı yönde olan zayıf gruplar: çok oynak coin (stop > %9), son 7 günde > %9 hareket,
+zayıf kırılım (< 0.2 ATR). Fiyatın EMA50'ye uzaklığı, piyasa genişliği, aynı yönde pozisyon sayısı tutarsız.
+
+## Varyantlar (`research/optimize.py`) — ay ≥ +%2 / negatif ay
+
+| Varyant | 2024-25 | 2025-26 | **2023-24 (bağımsız)** |
+|---|---|---|---|
+| Mevcut (kuralsız) | +%50 · 6 / 5 | +%53 · 7 / 4 | **+%148** · 6 / 5 · DD %19.5 |
+| R4 stop > %9 girme | +%75 · 8 / 3 | +%60 · 7 / 4 | +%84 · 5 / 5 · DD %23.8 ❌ |
+| R5 R4 + zayıf kırılım + 7g yarım risk | +%67 · 8 / 3 | +%50 · 8 / 4 | +%74 · 5 / 6 ❌ |
+| **R3 7g > %9 yarım risk** | +%47 · 6 / 4 | +%47 · 8 / 4 | **+%128** · 5 / **3** · DD **%15.8** ✅ |
+| BTC rejim filtresi (EMA200 / EMA50) | +%50 / +%40 | +%37 / +%71 | +%65 / +%85 |
+| Düşüşte risk yarıya (%10) | +%40 | +%33 | +%125 (DD %14.9) |
+| +2R / +3R'de yarı kâr al | +%50 / +%54 | +%39 / +%45 | +%101 / +%113 |
+| Sadece long | +%68 · 6 / 6 | +%55 · 4 / 7 | +%169 · 8 / 3 |
+
+**Sonuçlar**
+- 2024-26'da en iyi görünen R4/R5, görülmemiş 2023-24'te getiriyi yarıya indirdi → **aşırı uydurma**.
+  Bu yüzden kurallar en az bir bağımsız yılda test edilmeden bota eklenmez.
+- Üç yılın üçünde de düşüşü (%19.5→%15.8-17.7), negatif ay sayısını ve en kötü ayı azaltan tek kural **R3**;
+  bedeli getiride küçük bir düşüş. Varsayılan yapıldı (`strategies.trend.rules`).
+- R3 ile ortalama aylık getiri: 2023-24 %8.0, 2024-25 %3.4, 2025-26 %3.6 → "ortalama ayda +%2" üç yılda da
+  karşılanıyor. "Her ay en az +%2" hiçbir ayarda mümkün değil (yılda 3-4 negatif ay).
+- Funding arbitrajı (spot long + perp short, en yüksek funding'li coinler): 2024-26 funding ortalaması 8 saatte
+  %0.0016; komisyon sonrası yıllık −%9 ile +%4 → elendi.

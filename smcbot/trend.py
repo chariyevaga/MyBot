@@ -34,6 +34,7 @@ class TrendState:
     lower: np.ndarray
     atr: np.ndarray
     daily_trend: np.ndarray
+    d1: pd.DataFrame | None = None
 
 
 def analyze(h4: pd.DataFrame, d1: pd.DataFrame, tc) -> TrendState:
@@ -48,7 +49,16 @@ def analyze(h4: pd.DataFrame, d1: pd.DataFrame, tc) -> TrendState:
     ok = di >= 0
     dtrend = np.zeros(len(h4))
     dtrend[ok] = np.sign(d1["close"].to_numpy()[di[ok]] - ema[di[ok]])
-    return TrendState(h4, close_ns, upper, lower, a, dtrend)
+    return TrendState(h4, close_ns, upper, lower, a, dtrend, d1)
+
+
+def regime(d1: pd.DataFrame, ema_len: int, at: pd.Timestamp) -> int:
+    """+1 / -1: last *closed* daily candle above / below its EMA (used as a BTC market filter)."""
+    closed = d1[d1.index + D1 <= at]
+    if len(closed) < 2:
+        return 0
+    ema = closed["close"].ewm(span=ema_len, adjust=False).mean()
+    return int(np.sign(closed["close"].iat[-1] - ema.iat[-1]))
 
 
 def signal_at(symbol: str, st: TrendState, i: int, tc) -> Setup | None:
@@ -69,6 +79,8 @@ def signal_at(symbol: str, st: TrendState, i: int, tc) -> Setup | None:
     side = "long" if d == 1 else "short"
     level = st.upper[i] if d == 1 else st.lower[i]
     stop_pct = abs(c - stop) / c * 100
+    week_ago = i - 42  # 42 x 4H = 7 days
+    ret_7d = d * (c / float(st.h4["close"].iat[week_ago]) - 1) * 100 if week_ago >= 0 else 0.0
     return Setup(
         id=f"{symbol}|trend-{side}|{created:%Y%m%dT%H%M}",
         symbol=symbol, side=side, created_at=created,
@@ -80,9 +92,43 @@ def signal_at(symbol: str, st: TrendState, i: int, tc) -> Setup | None:
         poi="Donchian", zone_low=float(min(level, c)), zone_high=float(max(level, c)), sweep_price=float(level),
         swept=[], dol_rr=0.0, targets=[], atr_ltf=float(a), atr_mtf=float(a),
         features={"breakout_level": float(level), "atr_4h": float(a), "stop_pct": round(stop_pct, 3),
-                  "breakout_atr": round(abs(c - level) / a, 3), "bar_time": to_iso(created)},
+                  "breakout_atr": round(abs(c - level) / a, 3), "ret_7d_pct": round(ret_7d, 3),
+                  "bar_time": to_iso(created)},
         strategy="trend",
     )
+
+
+RULE_LABEL = {"breakout_atr": "kırılım gücü (ATR)", "ret_7d_pct": "son 7 gün getirisi %", "stop_pct": "stop mesafesi %"}
+
+
+def risk_multiplier(s: Setup, tc) -> tuple[float, str | None]:
+    """Signal-quality weights from ``strategies.trend.rules`` (research: docs/RESEARCH.md, Tur 3).
+
+    Each rule: {feature, below|above, risk_mult}. risk_mult 0 skips the signal. Multipliers combine.
+    """
+    mult, why = 1.0, []
+    for rule in tc.get("rules", None) or []:
+        v = s.features.get(rule["feature"])
+        if v is None:
+            continue
+        hit = ("below" in rule and v < rule["below"]) or ("above" in rule and v > rule["above"])
+        if hit:
+            mult *= float(rule["risk_mult"])
+            limit = f"< {rule['below']}" if "below" in rule else f"> {rule['above']}"
+            why.append(f"{RULE_LABEL.get(rule['feature'], rule['feature'])} {v:.2f} {limit} → risk ×{rule['risk_mult']}")
+    return mult, ("; ".join(why) or None)
+
+
+def drawdown_multiplier(peak_equity: float | None, equity: float, tc) -> float:
+    """Reduce risk while the account is in a drawdown (``strategies.trend.dd_risk_cut``)."""
+    if not peak_equity or peak_equity <= 0:
+        return 1.0
+    dd = (peak_equity - equity) / peak_equity * 100
+    mult = 1.0
+    for level, factor in tc.get("dd_risk_cut", None) or []:
+        if dd >= level:
+            mult = min(mult, float(factor))
+    return mult
 
 
 def signals(symbol: str, st: TrendState, tc, start_ns: int | None = None) -> list[Setup]:

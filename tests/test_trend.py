@@ -57,3 +57,21 @@ def test_trailing_stop_follows_best_close(cfg):
     cand = T.trail_candidate(st, int(st.close_ns[i]), 1, tc, upto_ns=int(st.close_ns[j]))
     best = st.h4["close"].to_numpy()[i:j + 1].max()
     assert cand == best - tc.atr_mult * st.atr[j]
+
+
+def test_risk_rules_and_drawdown_cut(cfg):
+    from smcbot.config import _wrap
+
+    tc = cfg.strategies.trend
+    st = T.analyze(*_trend_frames(_long_walk()), tc)
+    s = T.signals("X", st, tc)[0]
+    tc.rules = _wrap([{"feature": "stop_pct", "above": 0, "risk_mult": 0.5},
+                      {"feature": "breakout_atr", "below": 1e9, "risk_mult": 0.5}])
+    mult, why = T.risk_multiplier(s, tc)
+    assert mult == 0.25 and "stop mesafesi" in why
+    tc.rules = _wrap([{"feature": "stop_pct", "above": 1e9, "risk_mult": 0}])
+    assert T.risk_multiplier(s, tc) == (1.0, None)
+    tc.dd_risk_cut = _wrap([[10, 0.5], [20, 0.25]])
+    assert T.drawdown_multiplier(1000, 950, tc) == 1.0
+    assert T.drawdown_multiplier(1000, 880, tc) == 0.5
+    assert T.drawdown_multiplier(1000, 790, tc) == 0.25

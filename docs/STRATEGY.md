@@ -22,6 +22,8 @@ Her 4H mum kapanışında (00, 04, 08, 12, 16, 20 UTC; tarama en geç 30 dk içi
    sadece sıkılaşır, en az 0.1R ilerleyince güncellenir. Fiyat yeni stopun gerisindeyse pozisyon kapatılır.
 5. **Risk:** long %1, short %0.5 (short tarafı backtestte tutarsızdı); en fazla 6 pozisyon, coin
    başına 1, toplam açık risk %8. Stop mesafesi ortalama fiyatın %8'i olduğu için kaldıraç genelde 1-2x.
+   **Sinyal ağırlığı (R3):** coin son 7 günde işlem yönünde %9'dan fazla hareket ettiyse risk yarıya iner
+   (geç kalınmış kırılımlar). Kurallar `strategies.trend.rules` içinde; Telegram mesajında "Ağırlık:" satırı görünür.
 6. **Koruma:** günlük zarar %6, zirveden %35 düşüşte durur. Ardışık kayıp molası **yok** (kazanma
    oranı ~%36 olan bir stratejide kayıp serileri normaldir).
 7. **Haber filtresi:** kapalı (`strategies.trend.news_filter`), çünkü çok günlük pozisyonlarda test

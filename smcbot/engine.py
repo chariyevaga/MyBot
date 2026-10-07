@@ -574,9 +574,15 @@ class Engine:
                     reject = "Fiyat stop seviyesinin gerisinde"
                 elif abs(price - s.entry) > tc.max_entry_drift_r * s.risk:
                     reject = f"Fiyat kaçtı (> {tc.max_entry_drift_r}R)"
+                elif (weight := T.risk_multiplier(s, tc))[0] <= 0:
+                    reject = f"Sinyal kuralı: {weight[1]}"
                 else:
                     s.entry = price  # market order at the current price; the stop stays at the ATR level
-                    risk_pct = tc.risk_pct_long if s.side == "long" else tc.risk_pct_short
+                    gs = self._guard("trend").s
+                    risk_pct = (tc.risk_pct_long if s.side == "long" else tc.risk_pct_short) * weight[0]
+                    risk_pct *= T.drawdown_multiplier(gs.get("peak_equity"), gs.get("last_equity") or 0, tc)
+                    if weight[1]:
+                        s.reasons.append(f"Ağırlık: {weight[1]}")
                     reject, final = self._open(s, acct, risk_pct, slots, tc.max_total_risk_pct, "market")
                     if reject is None:
                         placed += 1

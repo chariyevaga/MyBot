@@ -47,6 +47,12 @@ strategies:
     max_signal_age_minutes: 30  # 4H kapanışından sonra en geç 30 dk içinde girilir
     max_entry_drift_r: 0.3    # fiyat sinyal kapanışından 0.3R'den fazla kaçtıysa girilmez
     news_filter: false        # çok günlük pozisyonlarda 4 saatlik haber filtresi test edilmedi (açılabilir)
+    # Sinyal ağırlıkları (risk_mult 0 = girme). 3 yılın üçünde de düşüşü ve kötü ayları azaltan tek kural:
+    # son 7 günde %9'dan fazla yükselmiş (short: düşmüş) coinde yarım risk. docs/RESEARCH.md > Tur 3
+    rules:
+      - {feature: ret_7d_pct, above: 9, risk_mult: 0.5}
+    # Kullanılabilir özellikler: breakout_atr, ret_7d_pct, stop_pct  (örn: {feature: stop_pct, above: 9, risk_mult: 0})
+    dd_risk_cut: []           # örn [[10, 0.5]] = hesap %10 düşüşteyken risk yarıya (3 yılda tutarlı fayda yok)
     guard:                    # trend için hesap koruması (kayıp serileri bu stratejide normaldir)
       max_daily_loss_pct: 6.0
       max_consecutive_losses: 0   # 0 = kapalı
